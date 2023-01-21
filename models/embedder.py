@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 
 
 # Positional encoding embedding. Code was taken from https://github.com/bmild/nerf.
@@ -22,7 +21,7 @@ class Embedder:
         if self.kwargs['log_sampling']:
             freq_bands = 2. ** torch.linspace(0., max_freq, N_freqs)
         else:
-            freq_bands = torch.linspace(2.**0., 2.**max_freq, N_freqs)
+            freq_bands = torch.linspace(2. ** 0., 2. ** max_freq, N_freqs)
 
         for freq in freq_bands:
             for p_fn in self.kwargs['periodic_fns']:
@@ -40,12 +39,14 @@ def get_embedder(multires, input_dims=3):
     embed_kwargs = {
         'include_input': True,
         'input_dims': input_dims,
-        'max_freq_log2': multires-1,
+        'max_freq_log2': multires - 1,
         'num_freqs': multires,
         'log_sampling': True,
         'periodic_fns': [torch.sin, torch.cos],
     }
 
     embedder_obj = Embedder(**embed_kwargs)
+
     def embed(x, eo=embedder_obj): return eo.embed(x)
+
     return embed, embedder_obj.out_dim

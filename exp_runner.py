@@ -1,17 +1,17 @@
-import os
-import time
-import logging
 import argparse
-import numpy as np
+import logging
+import os
+from shutil import copyfile
+
 import cv2 as cv
-import trimesh
+import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
-from shutil import copyfile
-from icecream import ic
-from tqdm import tqdm
+import trimesh
 from pyhocon import ConfigFactory
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
+
 from models.dataset import Dataset
 from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, NeRF
 from models.renderer import NeuSRenderer
@@ -131,14 +131,14 @@ class Runner:
             # Loss
             color_error = (color_fine - true_rgb) * mask
             color_fine_loss = F.l1_loss(color_error, torch.zeros_like(color_error), reduction='sum') / mask_sum
-            psnr = 20.0 * torch.log10(1.0 / (((color_fine - true_rgb)**2 * mask).sum() / (mask_sum * 3.0)).sqrt())
+            psnr = 20.0 * torch.log10(1.0 / (((color_fine - true_rgb) ** 2 * mask).sum() / (mask_sum * 3.0)).sqrt())
 
             eikonal_loss = gradient_error
 
             mask_loss = F.binary_cross_entropy(weight_sum.clip(1e-3, 1.0 - 1e-3), mask)
 
-            loss = color_fine_loss +\
-                   eikonal_loss * self.igr_weight +\
+            loss = color_fine_loss + \
+                   eikonal_loss * self.igr_weight + \
                    mask_loss * self.mask_weight
 
             self.optimizer.zero_grad()
@@ -207,7 +207,8 @@ class Runner:
         copyfile(self.conf_path, os.path.join(self.base_exp_dir, 'recording', 'config.conf'))
 
     def load_checkpoint(self, checkpoint_name):
-        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name), map_location=self.device)
+        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name),
+                                map_location=self.device)
         self.nerf_outside.load_state_dict(checkpoint['nerf'])
         self.sdf_network.load_state_dict(checkpoint['sdf_network_fine'])
         self.deviation_network.load_state_dict(checkpoint['variance_network_fine'])
@@ -228,7 +229,8 @@ class Runner:
         }
 
         os.makedirs(os.path.join(self.base_exp_dir, 'checkpoints'), exist_ok=True)
-        torch.save(checkpoint, os.path.join(self.base_exp_dir, 'checkpoints', 'ckpt_{:0>6d}.pth'.format(self.iter_step)))
+        torch.save(checkpoint,
+                   os.path.join(self.base_exp_dir, 'checkpoints', 'ckpt_{:0>6d}.pth'.format(self.iter_step)))
 
     def validate_image(self, idx=-1, resolution_level=-1):
         if idx < 0:
@@ -257,7 +259,8 @@ class Runner:
                                               cos_anneal_ratio=self.get_cos_anneal_ratio(),
                                               background_rgb=background_rgb)
 
-            def feasible(key): return (key in render_out) and (render_out[key] is not None)
+            def feasible(key):
+                return (key in render_out) and (render_out[key] is not None)
 
             if feasible('color_fine'):
                 out_rgb_fine.append(render_out['color_fine'].detach().cpu().numpy())
@@ -329,7 +332,7 @@ class Runner:
         bound_min = torch.tensor(self.dataset.object_bbox_min, dtype=torch.float32)
         bound_max = torch.tensor(self.dataset.object_bbox_max, dtype=torch.float32)
 
-        vertices, triangles =\
+        vertices, triangles = \
             self.renderer.extract_geometry(bound_min, bound_max, resolution=resolution, threshold=threshold)
         os.makedirs(os.path.join(self.base_exp_dir, 'meshes'), exist_ok=True)
 
@@ -349,7 +352,7 @@ class Runner:
             images.append(self.render_novel_image(img_idx_0,
                                                   img_idx_1,
                                                   np.sin(((i / n_frames) - 0.5) * np.pi) * 0.5 + 0.5,
-                          resolution_level=4))
+                                                  resolution_level=4))
         for i in range(n_frames):
             images.append(images[n_frames - i - 1])
 

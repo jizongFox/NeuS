@@ -1,11 +1,9 @@
-import numpy as np
 import os
 import sys
-import cv2 as cv
 from glob import glob
-from scipy.spatial.transform import Rotation as Rot
-from shutil import copytree
-import trimesh
+
+import cv2 as cv
+import numpy as np
 
 
 def convert_cameras(work_dir, crop_pixels):
@@ -29,7 +27,7 @@ def convert_cameras(work_dir, crop_pixels):
 
         pose = np.diag([1.0, 1.0, 1.0, 1.0])
         pose[:3, :3] = rot
-        pose[:3, 3] = trans # w2c
+        pose[:3, 3] = trans  # w2c
 
         world_mat = intrinsic @ pose
         world_mat = world_mat.astype(np.float32)
@@ -58,7 +56,7 @@ def convert_cameras(work_dir, crop_pixels):
 
     for i, image_path in enumerate(image_list):
         img = cv.imread(image_path)
-        img = img[crop_pixels: -crop_pixels, crop_pixels: -crop_pixels]    # remove black area of undistorted images
+        img = img[crop_pixels: -crop_pixels, crop_pixels: -crop_pixels]  # remove black area of undistorted images
         cv.imwrite(os.path.join(out_dir, 'image', '{:0>3d}.png'.format(i)), img)
         cv.imwrite(os.path.join(out_dir, 'mask', '{:0>3d}.png'.format(i)), np.ones_like(img) * 255)
 

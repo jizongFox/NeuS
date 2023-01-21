@@ -1,14 +1,14 @@
-import numpy as np
-import trimesh
-import cv2 as cv
-import sys
 import os
+import sys
 from glob import glob
 
+import cv2 as cv
+import numpy as np
+import trimesh
 
 if __name__ == '__main__':
     work_dir = sys.argv[1]
-    poses_hwf = np.load(os.path.join(work_dir, 'poses.npy')) # n_images, 3, 5
+    poses_hwf = np.load(os.path.join(work_dir, 'poses.npy'))  # n_images, 3, 5
     poses_raw = poses_hwf[:, :, :4]
     hwf = poses_hwf[:, :, 4]
     pose = np.diag([1.0, 1.0, 1.0, 1.0])
@@ -30,7 +30,7 @@ if __name__ == '__main__':
     convert_mat = np.zeros([4, 4], dtype=np.float32)
     convert_mat[0, 1] = 1.0
     convert_mat[1, 0] = 1.0
-    convert_mat[2, 2] =-1.0
+    convert_mat[2, 2] = -1.0
     convert_mat[3, 3] = 1.0
 
     for i in range(n_images):
@@ -48,7 +48,6 @@ if __name__ == '__main__':
         cam_dict['camera_mat_inv_{}'.format(i)] = np.linalg.inv(intrinsic)
         cam_dict['world_mat_{}'.format(i)] = world_mat
         cam_dict['world_mat_inv_{}'.format(i)] = np.linalg.inv(world_mat)
-
 
     pcd = trimesh.load(os.path.join(work_dir, 'sparse_points_interest.ply'))
     vertices = pcd.vertices

@@ -1,10 +1,7 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
-import logging
 import mcubes
-from icecream import ic
+import numpy as np
+import torch
+import torch.nn.functional as F
 
 
 def extract_fields(bound_min, bound_max, resolution, query_func):
@@ -105,7 +102,7 @@ class NeuSRenderer:
         pts = rays_o[:, None, :] + rays_d[:, None, :] * mid_z_vals[..., :, None]  # batch_size, n_samples, 3
 
         dis_to_center = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=True).clip(1.0, 1e10)
-        pts = torch.cat([pts / dis_to_center, 1.0 / dis_to_center], dim=-1)       # batch_size, n_samples, 4
+        pts = torch.cat([pts / dis_to_center, 1.0 / dis_to_center], dim=-1)  # batch_size, n_samples, 4
 
         dirs = rays_d[:, None, :].expand(batch_size, n_samples, 3)
 
@@ -224,7 +221,7 @@ class NeuSRenderer:
         gradients = sdf_network.gradient(pts).squeeze()
         sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
 
-        inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)           # Single parameter
+        inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)  # Single parameter
         inv_s = inv_s.expand(batch_size * n_samples, 1)
 
         true_cos = (dirs * gradients).sum(-1, keepdim=True)
@@ -254,7 +251,7 @@ class NeuSRenderer:
         if background_alpha is not None:
             alpha = alpha * inside_sphere + background_alpha[:, :n_samples] * (1.0 - inside_sphere)
             alpha = torch.cat([alpha, background_alpha[:, n_samples:]], dim=-1)
-            sampled_color = sampled_color * inside_sphere[:, :, None] +\
+            sampled_color = sampled_color * inside_sphere[:, :, None] + \
                             background_sampled_color[:, :n_samples] * (1.0 - inside_sphere)[:, :, None]
             sampled_color = torch.cat([sampled_color, background_sampled_color[:, n_samples:]], dim=1)
 
@@ -262,7 +259,7 @@ class NeuSRenderer:
         weights_sum = weights.sum(dim=-1, keepdim=True)
 
         color = (sampled_color * weights[:, :, None]).sum(dim=1)
-        if background_rgb is not None:    # Fixed background, usually black
+        if background_rgb is not None:  # Fixed background, usually black
             color = color + background_rgb * (1.0 - weights_sum)
 
         # Eikonal loss
@@ -285,7 +282,7 @@ class NeuSRenderer:
 
     def render(self, rays_o, rays_d, near, far, perturb_overwrite=-1, background_rgb=None, cos_anneal_ratio=0.0):
         batch_size = len(rays_o)
-        sample_dist = 2.0 / self.n_samples   # Assuming the region of interest is a unit sphere
+        sample_dist = 2.0 / self.n_samples  # Assuming the region of interest is a unit sphere
         z_vals = torch.linspace(0.0, 1.0, self.n_samples)
         z_vals = near + (far - near) * z_vals[None, :]
 
@@ -327,7 +324,7 @@ class NeuSRenderer:
                                                 z_vals,
                                                 sdf,
                                                 self.n_importance // self.up_sample_steps,
-                                                64 * 2**i)
+                                                64 * 2 ** i)
                     z_vals, sdf = self.cat_z_vals(rays_o,
                                                   rays_d,
                                                   z_vals,
