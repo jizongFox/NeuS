@@ -6,10 +6,14 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation as Rot
 from scipy.spatial.transform import Slerp
+from tqdm import tqdm
 
 
 # This function is borrowed from IDR: https://github.com/lioryariv/idr
 def load_K_Rt_from_P(filename, P=None):
+    """
+    return camera intrinsic matrix and
+    """
     if P is None:
         lines = open(filename).read().splitlines()
         if len(lines) == 4:
@@ -17,10 +21,19 @@ def load_K_Rt_from_P(filename, P=None):
         lines = [[x[0], x[1], x[2], x[3]] for x in (x.split(" ") for x in lines)]
         P = np.asarray(lines).astype(np.float32).squeeze()
 
-    out = cv.decomposeProjectionMatrix(P)
-    K = out[0]
-    R = out[1]
-    t = out[2]
+    r"""
+    [cameraMatrix,rotMatrix,transVect] = cv.decomposeProjectionMatrix(projMatrix)
+    
+    cameraMatrix 3x3 camera matrix K.
+    rotMatrix 3x3 external rotation matrix R.
+    transVect 4x1 translation vector T.
+    S Optional output struct with the following fields:
+        rotMatrX 3x3 rotation matrix around x-axis.
+        rotMatrY 3x3 rotation matrix around y-axis.
+        rotMatrZ 3x3 rotation matrix around z-axis.
+        eulerAngles 3-element vector containing three Euler angles of rotation in degrees.
+    """
+    K, R, t, *_ = cv.decomposeProjectionMatrix(P)
 
     K = K / K[2, 2]
     intrinsics = np.eye(4)
@@ -51,9 +64,16 @@ class Dataset:
         self.camera_dict = camera_dict
         self.images_lis = sorted(glob(os.path.join(self.data_dir, 'image/*.png')))
         self.n_images = len(self.images_lis)
-        self.images_np = np.stack([cv.imread(im_name) for im_name in self.images_lis]) / 256.0
+        h, w, c = cv.imread(self.images_lis[0]).shape
+        self.images_np = np.zeros((self.n_images, h, w, c))
+        for i, im_name in enumerate(tqdm(self.images_lis, desc="loading rgb images", leave=False)):
+            self.images_np[i] = cv.imread(im_name) / 256.0
+
         self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.png')))
-        self.masks_np = np.stack([cv.imread(im_name) for im_name in self.masks_lis]) / 256.0
+
+        self.masks_np = np.zeros((self.n_images, h, w, c))
+        for i, im_name in enumerate(tqdm(self.masks_lis, desc="loading mask images", leave=False)):
+            self.masks_np[i] = cv.imread(im_name) / 256.0
 
         # world_mat is a projection matrix from world to image
         self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
@@ -93,11 +113,11 @@ class Dataset:
 
         print('Load data: End')
 
-    def gen_rays_at(self, img_idx, resolution_level=1):
+    def gen_rays_at(self, img_idx: int, resolution_level: int = 1):
         """
         Generate rays at world space from one camera.
         """
-        l = resolution_level
+        l: int = resolution_level
         tx = torch.linspace(0, self.W - 1, self.W // l)
         ty = torch.linspace(0, self.H - 1, self.H // l)
         pixels_x, pixels_y = torch.meshgrid(tx, ty)
@@ -108,20 +128,20 @@ class Dataset:
         rays_o = self.pose_all[img_idx, None, None, :3, 3].expand(rays_v.shape)  # W, H, 3
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1)
 
-    def gen_random_rays_at(self, img_idx, batch_size):
+    def gen_random_rays_at(self, img_idx: int, batch_size: int):
         """
         Generate random rays at world space from one camera.
         """
         pixels_x = torch.randint(low=0, high=self.W, size=[batch_size])
         pixels_y = torch.randint(low=0, high=self.H, size=[batch_size])
-        color = self.images[img_idx][(pixels_y, pixels_x)]  # batch_size, 3
-        mask = self.masks[img_idx][(pixels_y, pixels_x)]  # batch_size, 3
+        color = self.images[img_idx].to(self.device)[(pixels_y, pixels_x)]  # batch_size, 3
+        mask = self.masks[img_idx].to(self.device)[(pixels_y, pixels_x)]  # batch_size, 3
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1).float()  # batch_size, 3
         p = torch.matmul(self.intrinsics_all_inv[img_idx, None, :3, :3], p[:, :, None]).squeeze()  # batch_size, 3
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)  # batch_size, 3
         rays_v = torch.matmul(self.pose_all[img_idx, None, :3, :3], rays_v[:, :, None]).squeeze()  # batch_size, 3
         rays_o = self.pose_all[img_idx, None, :3, 3].expand(rays_v.shape)  # batch_size, 3
-        return torch.cat([rays_o.cpu(), rays_v.cpu(), color, mask[:, :1]], dim=-1).cuda()  # batch_size, 10
+        return torch.cat([rays_o, rays_v, color, mask[:, :1]], dim=-1)  # batch_size, 10
 
     def gen_rays_between(self, idx_0, idx_1, ratio, resolution_level=1):
         """
