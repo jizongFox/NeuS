@@ -40,7 +40,7 @@ def load_K_Rt_from_P(filename, P=None):
     intrinsics[:3, :3] = K
 
     pose = np.eye(4, dtype=np.float32)
-    pose[:3, :3] = R.transpose()
+    pose[:3, :3] = R.transpose()  # The transpose of a rotation matrix is its inverse.
     pose[:3, 3] = (t[:3] / t[3])[:, 0]
 
     return intrinsics, pose
