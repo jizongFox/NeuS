@@ -33,10 +33,10 @@ def extract_geometry(bound_min, bound_max, resolution, threshold, query_func):
     return vertices, triangles
 
 
-def sample_pdf(bins, weights, n_samples, det=False):
+def sample_pdf(bins, weights, n_samples, det: bool = False):
     # This implementation is from NeRF
     # Get pdf
-    weights = weights + 1e-5  # prevent nans
+    weights += 1e-5  # prevent nans
     pdf = weights / torch.sum(weights, -1, keepdim=True)
     cdf = torch.cumsum(pdf, -1)
     cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)
@@ -58,9 +58,9 @@ def sample_pdf(bins, weights, n_samples, det=False):
     cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
     bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
 
-    denom = (cdf_g[..., 1] - cdf_g[..., 0])
-    denom = torch.where(denom < 1e-5, torch.ones_like(denom), denom)
-    t = (u - cdf_g[..., 0]) / denom
+    denominator = (cdf_g[..., 1] - cdf_g[..., 0])
+    denominator = torch.where(denominator < 1e-5, torch.ones_like(denominator), denominator)
+    t = (u - cdf_g[..., 0]) / denominator
     samples = bins_g[..., 0] + t * (bins_g[..., 1] - bins_g[..., 0])
 
     return samples
@@ -161,10 +161,10 @@ class NeuSRenderer:
         cos_val = cos_val.clip(-1e3, 0.0) * inside_sphere
 
         dist = (next_z_vals - prev_z_vals)
-        prev_esti_sdf = mid_sdf - cos_val * dist * 0.5
-        next_esti_sdf = mid_sdf + cos_val * dist * 0.5
-        prev_cdf = torch.sigmoid(prev_esti_sdf * inv_s)
-        next_cdf = torch.sigmoid(next_esti_sdf * inv_s)
+        prev_estimate_sdf = mid_sdf - cos_val * dist * 0.5
+        next_estimate_sdf = mid_sdf + cos_val * dist * 0.5
+        prev_cdf = torch.sigmoid(prev_estimate_sdf * inv_s)
+        next_cdf = torch.sigmoid(next_estimate_sdf * inv_s)
         alpha = (prev_cdf - next_cdf + 1e-5) / (prev_cdf + 1e-5)
         weights = alpha * torch.cumprod(
             torch.cat([torch.ones([batch_size, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1]

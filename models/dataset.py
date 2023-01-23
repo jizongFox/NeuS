@@ -136,11 +136,23 @@ class Dataset:
         pixels_y = torch.randint(low=0, high=self.H, size=[batch_size])
         color = self.images[img_idx].to(self.device)[(pixels_y, pixels_x)]  # batch_size, 3
         mask = self.masks[img_idx].to(self.device)[(pixels_y, pixels_x)]  # batch_size, 3
+        # pixel coordinates
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1).float()  # batch_size, 3
+        # x = K@Pos@X
+        # K^-1 x = Pos X
+        # Pos^-1 K^-1 x = X
+
+        # intrinsic matrix to convert to camera coordinates
         p = torch.matmul(self.intrinsics_all_inv[img_idx, None, :3, :3], p[:, :, None]).squeeze()  # batch_size, 3
+        # K^-1 x
+
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)  # batch_size, 3
         rays_v = torch.matmul(self.pose_all[img_idx, None, :3, :3], rays_v[:, :, None]).squeeze()  # batch_size, 3
+        # Pos @ K^-1 @ x
+
+        # camera pos
         rays_o = self.pose_all[img_idx, None, :3, 3].expand(rays_v.shape)  # batch_size, 3
+
         return torch.cat([rays_o, rays_v, color, mask[:, :1]], dim=-1)  # batch_size, 10
 
     def gen_rays_between(self, idx_0, idx_1, ratio, resolution_level=1):
@@ -176,7 +188,7 @@ class Dataset:
         rays_o = trans[None, None, :3].expand(rays_v.shape)  # W, H, 3
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1)
 
-    def near_far_from_sphere(self, rays_o, rays_d):
+    def near_far_from_sphere(self, rays_o, rays_d):  # noqa
         a = torch.sum(rays_d ** 2, dim=-1, keepdim=True)
         b = 2.0 * torch.sum(rays_o * rays_d, dim=-1, keepdim=True)
         mid = 0.5 * (-b) / a

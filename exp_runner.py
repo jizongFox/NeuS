@@ -1,6 +1,10 @@
+from __future__ import annotations
+
 import argparse
 import logging
 import os
+import typing as t
+from itertools import cycle
 from shutil import copyfile
 
 import cv2 as cv
@@ -9,6 +13,7 @@ import torch
 import torch.nn.functional as F
 import trimesh
 from pyhocon import ConfigFactory
+from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -94,6 +99,19 @@ class Runner:
         if self.mode[:5] == 'train':
             self.file_backup()
 
+    def visualize_rays(self, rays: t.Sequence[Tensor] | Tensor) -> None:
+        markers = cycle(['o', '^'])
+        import matplotlib.pyplot as plt
+        if not isinstance(rays, t.Sequence):
+            rays = [rays]
+        rays = [x.clone() for x in rays]
+        rays = [x.cpu().numpy() for x in rays]
+        fig = plt.figure()
+        ax = fig.add_subplot(projection='3d')
+        for r, m in zip(rays, markers):
+            ax.scatter(*r.transpose(-1, -2), marker=m)
+        plt.show()
+
     def train(self):
         self.writer = SummaryWriter(log_dir=os.path.join(self.base_exp_dir, 'logs'))
         self.update_learning_rate()
@@ -104,6 +122,7 @@ class Runner:
             data = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
 
             rays_o, rays_d, true_rgb, mask = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10]
+            # self.visualize_rays([rays_o, rays_d])
             near, far = self.dataset.near_far_from_sphere(rays_o, rays_d)
 
             background_rgb = None
