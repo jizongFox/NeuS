@@ -126,7 +126,7 @@ class NeuSRenderer:
             'weights': weights,
         }
 
-    def up_sample(self, rays_o, rays_d, z_vals, sdf, n_importance, inv_s):
+    def up_sample(self, *, rays_o, rays_d, z_vals, sdf, n_importance, inv_s):
         """
         Up sampling give a fixed inv_s
         """
@@ -189,6 +189,7 @@ class NeuSRenderer:
         return z_vals, sdf
 
     def render_core(self,
+                    *,
                     rays_o,
                     rays_d,
                     z_vals,
@@ -313,18 +314,18 @@ class NeuSRenderer:
         background_sampled_color = None
 
         # Up sample
-        if self.n_importance > 0:
-            with torch.no_grad():
+        with torch.no_grad():
+            if self.n_importance > 0:
                 pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]
                 sdf = self.sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, self.n_samples)
 
                 for i in range(self.up_sample_steps):
-                    new_z_vals = self.up_sample(rays_o,
-                                                rays_d,
-                                                z_vals,
-                                                sdf,
-                                                self.n_importance // self.up_sample_steps,
-                                                64 * 2 ** i)
+                    new_z_vals = self.up_sample(rays_o=rays_o,
+                                                rays_d=rays_d,
+                                                z_vals=z_vals,
+                                                sdf=sdf,
+                                                n_importance=self.n_importance // self.up_sample_steps,
+                                                inv_s=64 * 2 ** i)
                     z_vals, sdf = self.cat_z_vals(rays_o,
                                                   rays_d,
                                                   z_vals,
@@ -332,7 +333,7 @@ class NeuSRenderer:
                                                   sdf,
                                                   last=(i + 1 == self.up_sample_steps))
 
-            n_samples = self.n_samples + self.n_importance
+                n_samples = self.n_samples + self.n_importance
 
         # Background model
         if self.n_outside > 0:
@@ -344,13 +345,13 @@ class NeuSRenderer:
             background_alpha = ret_outside['alpha']
 
         # Render core
-        ret_fine = self.render_core(rays_o,
-                                    rays_d,
-                                    z_vals,
-                                    sample_dist,
-                                    self.sdf_network,
-                                    self.deviation_network,
-                                    self.color_network,
+        ret_fine = self.render_core(rays_o=rays_o,
+                                    rays_d=rays_d,
+                                    z_vals=z_vals,
+                                    sample_dist=sample_dist,
+                                    sdf_network=self.sdf_network,
+                                    deviation_network=self.deviation_network,
+                                    color_network=self.color_network,
                                     background_rgb=background_rgb,
                                     background_alpha=background_alpha,
                                     background_sampled_color=background_sampled_color,

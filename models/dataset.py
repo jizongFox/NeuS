@@ -33,8 +33,9 @@ def load_K_Rt_from_P(filename, P=None):
         rotMatrZ 3x3 rotation matrix around z-axis.
         eulerAngles 3-element vector containing three Euler angles of rotation in degrees.
     """
+    # https://stackoverflow.com/questions/62686618/opencv-decompose-projection-matrix
     K, R, t, *_ = cv.decomposeProjectionMatrix(P)
-
+    # here t =? -RC
     K = K / K[2, 2]
     intrinsics = np.eye(4)
     intrinsics[:3, :3] = K
@@ -141,16 +142,16 @@ class Dataset:
         # x = K@Pos@X
         # K^-1 x = Pos X
         # Pos^-1 K^-1 x = X
-
         # intrinsic matrix to convert to camera coordinates
         p = torch.matmul(self.intrinsics_all_inv[img_idx, None, :3, :3], p[:, :, None]).squeeze()  # batch_size, 3
         # K^-1 x
-
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)  # batch_size, 3
         rays_v = torch.matmul(self.pose_all[img_idx, None, :3, :3], rays_v[:, :, None]).squeeze()  # batch_size, 3
+        # here the pos is already the inverse of the pos.
         # Pos @ K^-1 @ x
 
         # camera pos
+        # https://en.wikipedia.org/wiki/Camera_matrix#:~:text=The%20camera%20position,-Again%2C%20the%20null&text=This%20implies%20that%20the%20camera,the%20camera%20matrix%20refers%20to.
         rays_o = self.pose_all[img_idx, None, :3, 3].expand(rays_v.shape)  # batch_size, 3
 
         return torch.cat([rays_o, rays_v, color, mask[:, :1]], dim=-1)  # batch_size, 10
