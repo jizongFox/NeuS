@@ -2,8 +2,10 @@ import mcubes
 import numpy as np
 import torch
 import torch.nn.functional as F
+from torch import Tensor
 
 
+@torch.no_grad()
 def extract_fields(bound_min, bound_max, resolution, query_func):
     N = 64
     X = torch.linspace(bound_min[0], bound_max[0], resolution).split(N)
@@ -11,14 +13,13 @@ def extract_fields(bound_min, bound_max, resolution, query_func):
     Z = torch.linspace(bound_min[2], bound_max[2], resolution).split(N)
 
     u = np.zeros([resolution, resolution, resolution], dtype=np.float32)
-    with torch.no_grad():
-        for xi, xs in enumerate(X):
-            for yi, ys in enumerate(Y):
-                for zi, zs in enumerate(Z):
-                    xx, yy, zz = torch.meshgrid(xs, ys, zs)
-                    pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1)
-                    val = query_func(pts).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy()
-                    u[xi * N: xi * N + len(xs), yi * N: yi * N + len(ys), zi * N: zi * N + len(zs)] = val
+    for xi, xs in enumerate(X):
+        for yi, ys in enumerate(Y):
+            for zi, zs in enumerate(Z):
+                xx, yy, zz = torch.meshgrid(xs, ys, zs)
+                pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1)
+                val = query_func(pts).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy()
+                u[xi * N: xi * N + len(xs), yi * N: yi * N + len(ys), zi * N: zi * N + len(zs)] = val
     return u
 
 
@@ -33,13 +34,14 @@ def extract_geometry(bound_min, bound_max, resolution, threshold, query_func):
     return vertices, triangles
 
 
+@torch.no_grad()
 def sample_pdf(bins, weights, n_samples, det: bool = False):
     # This implementation is from NeRF
     # Get pdf
     weights += 1e-5  # prevent nans
     pdf = weights / torch.sum(weights, -1, keepdim=True)
     cdf = torch.cumsum(pdf, -1)
-    cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)
+    cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)  # make it size be N instead of N - 1
     # Take uniform samples
     if det:
         u = torch.linspace(0. + 0.5 / n_samples, 1. - 0.5 / n_samples, steps=n_samples)
@@ -63,7 +65,11 @@ def sample_pdf(bins, weights, n_samples, det: bool = False):
     t = (u - cdf_g[..., 0]) / denominator
     samples = bins_g[..., 0] + t * (bins_g[..., 1] - bins_g[..., 0])
 
-    return samples
+    return samples.detach()
+
+
+def get_pts(rays_o: Tensor, rays_d: Tensor, z_vals: Tensor):
+    return rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]
 
 
 class NeuSRenderer:
@@ -126,12 +132,15 @@ class NeuSRenderer:
             'weights': weights,
         }
 
+    @torch.no_grad()
     def up_sample(self, *, rays_o, rays_d, z_vals, sdf, n_importance, inv_s):
         """
         Up sampling give a fixed inv_s
+        args
+            inv_s: value related to the temperature of the softmax.
         """
         batch_size, n_samples = z_vals.shape
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]  # n_rays, n_samples, 3
+        pts = get_pts(rays_o, rays_d, z_vals)  # n_rays, n_samples, 3
         radius = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=False)
         inside_sphere = (radius[:, :-1] < 1.0) | (radius[:, 1:] < 1.0)
         sdf = sdf.reshape(batch_size, n_samples)
@@ -169,13 +178,17 @@ class NeuSRenderer:
         weights = alpha * torch.cumprod(
             torch.cat([torch.ones([batch_size, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1]
 
-        z_samples = sample_pdf(z_vals, weights, n_importance, det=True).detach()
+        z_samples = sample_pdf(z_vals, weights, n_importance, det=True)
         return z_samples
 
+    @torch.no_grad()
     def cat_z_vals(self, rays_o, rays_d, z_vals, new_z_vals, sdf, last=False):
+        """
+        adding extra new_z_vals and  new_sdf to sfd and z_values
+        """
         batch_size, n_samples = z_vals.shape
         _, n_importance = new_z_vals.shape
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * new_z_vals[..., :, None]
+        pts = get_pts(rays_o, rays_d, new_z_vals)
         z_vals = torch.cat([z_vals, new_z_vals], dim=-1)
         z_vals, index = torch.sort(z_vals, dim=-1)
 
@@ -209,7 +222,8 @@ class NeuSRenderer:
         mid_z_vals = z_vals + dists * 0.5
 
         # Section midpoints
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * mid_z_vals[..., :, None]  # n_rays, n_samples, 3
+        pts = get_pts(rays_o, rays_d, mid_z_vals)
+
         dirs = rays_d[:, None, :].expand(pts.shape)
 
         pts = pts.reshape(-1, 3)
@@ -314,26 +328,25 @@ class NeuSRenderer:
         background_sampled_color = None
 
         # Up sample
-        with torch.no_grad():
-            if self.n_importance > 0:
-                pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]
-                sdf = self.sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, self.n_samples)
+        if self.n_importance > 0:
+            pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]
+            sdf = self.sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, self.n_samples)
 
-                for i in range(self.up_sample_steps):
-                    new_z_vals = self.up_sample(rays_o=rays_o,
-                                                rays_d=rays_d,
-                                                z_vals=z_vals,
-                                                sdf=sdf,
-                                                n_importance=self.n_importance // self.up_sample_steps,
-                                                inv_s=64 * 2 ** i)
-                    z_vals, sdf = self.cat_z_vals(rays_o,
-                                                  rays_d,
-                                                  z_vals,
-                                                  new_z_vals,
-                                                  sdf,
-                                                  last=(i + 1 == self.up_sample_steps))
+            for i in range(self.up_sample_steps):
+                new_z_vals = self.up_sample(rays_o=rays_o,
+                                            rays_d=rays_d,
+                                            z_vals=z_vals,
+                                            sdf=sdf,
+                                            n_importance=self.n_importance // self.up_sample_steps,
+                                            inv_s=64 * 2 ** i)
+                z_vals, sdf = self.cat_z_vals(rays_o,
+                                              rays_d,
+                                              z_vals,
+                                              new_z_vals,
+                                              sdf,
+                                              last=(i + 1 == self.up_sample_steps))
 
-                n_samples = self.n_samples + self.n_importance
+            n_samples = self.n_samples + self.n_importance
 
         # Background model
         if self.n_outside > 0:
