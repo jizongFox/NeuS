@@ -329,7 +329,8 @@ class NeuSRenderer:
 
         # Up sample
         if self.n_importance > 0:
-            n_samples, z_vals = self.resampling(rays_d, rays_o, z_vals, up_sample_steps=self.up_sample_steps)
+            n_samples, z_vals = self.resampling(rays_d, rays_o, z_vals, up_sample_steps=self.up_sample_steps,
+                                                n_importance=self.n_importance)
 
         # Background model
         if self.n_outside > 0:
@@ -371,24 +372,27 @@ class NeuSRenderer:
             'inside_sphere': ret_fine['inside_sphere']
         }
 
-    def resampling(self, rays_d, rays_o, z_vals, up_sample_steps: int, ):
+    def resampling(self, rays_d, rays_o, z_vals, up_sample_steps: int, n_importance: int):
         batch_size = rays_d.shape[0]
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]
+        pts = get_pts(rays_o, rays_d, z_vals)
         sdf = self.sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, self.n_samples)
-        for i in range(up_sample_steps):
+
+        assert n_importance % up_sample_steps == 0, f"{n_importance} should be divisible by {up_sample_steps}"
+        cur_num_importance = n_importance // up_sample_steps
+        for i in range(1, up_sample_steps + 1):
             new_z_vals = self._up_sample(rays_o=rays_o,
                                          rays_d=rays_d,
                                          z_vals=z_vals,
                                          sdf=sdf,
-                                         n_importance=self.n_importance // self.up_sample_steps,
+                                         n_importance=cur_num_importance,
                                          inv_s=64 * 2 ** i)
             z_vals, sdf = self._cat_z_vals(rays_o,
                                            rays_d,
                                            z_vals,
                                            new_z_vals,
                                            sdf,
-                                           last=(i + 1 == self.up_sample_steps))
-        n_samples = self.n_samples + self.n_importance
+                                           last=(i == up_sample_steps))
+        n_samples = self.n_samples + n_importance
         return n_samples, z_vals
 
     def extract_geometry(self, bound_min, bound_max, resolution, threshold=0.0):
