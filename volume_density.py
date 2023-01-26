@@ -45,14 +45,14 @@ def neus():
     x = np.linspace(start=-30, stop=30, num=10000)
 
     def distance_func_complex(x):
-        return np.maximum.reduce([-x, x - 7, -x + 8, x - 15])
+        return np.maximum.reduce([-x, x - 7])
 
     def distance_func_simple(x):
         return -x
 
-    s = 10
+    s = 1
 
-    p_density = get_p(x, distance_func=distance_func_complex, s=s, disable_negative=True)
+    p_density = get_p(x, distance_func=distance_func_complex, s=s, disable_negative=False)
 
     T = np.cumprod((1 - p_density))
     weight = p_density * T

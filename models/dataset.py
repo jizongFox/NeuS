@@ -1,3 +1,4 @@
+import logging
 import os
 from glob import glob
 
@@ -35,7 +36,7 @@ def load_K_Rt_from_P(filename, P=None):
     """
     # https://stackoverflow.com/questions/62686618/opencv-decompose-projection-matrix
     K, R, t, *_ = cv.decomposeProjectionMatrix(P)
-    # here t =? -RC
+    # here t =? -RC, yes, as the translation of the real world coordinate.
     K = K / K[2, 2]
     intrinsics = np.eye(4)
     intrinsics[:3, :3] = K
@@ -50,7 +51,7 @@ def load_K_Rt_from_P(filename, P=None):
 class Dataset:
     def __init__(self, conf):
         super(Dataset, self).__init__()
-        print('Load data: Begin')
+        logging.info('Load data: Begin')
         self.device = torch.device('cuda')
         self.conf = conf
 
@@ -103,6 +104,7 @@ class Dataset:
         self.H, self.W = self.images.shape[1], self.images.shape[2]
         self.image_pixels = self.H * self.W
 
+        # todo: what does this mean?
         object_bbox_min = np.array([-1.01, -1.01, -1.01, 1.0])
         object_bbox_max = np.array([1.01, 1.01, 1.01, 1.0])
         # Object scale mat: region of interest to **extract mesh**
@@ -112,7 +114,7 @@ class Dataset:
         self.object_bbox_min = object_bbox_min[:3, 0]
         self.object_bbox_max = object_bbox_max[:3, 0]
 
-        print('Load data: End')
+        logging.info('Load data: End')
 
     def gen_rays_at(self, img_idx: int, resolution_level: int = 1):
         """
