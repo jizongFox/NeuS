@@ -167,10 +167,6 @@ class Runner:
             if env.is_initialized:
                 for model in self.__model_list:
                     average_gradients(model)
-                logging.debug(
-                    f"process {env.local_rank}, "
-                    f"model params: {self.nerf_outside.parameters().__next__().max().item()}"
-                )
 
             self.optimizer.step()
             self.iter_step += 1
@@ -200,7 +196,6 @@ class Runner:
 
             if self.iter_step % len(image_perm) == 0:
                 image_perm = self.get_image_perm()
-                logging.debug(f"process: {str(env.local_rank)} {str(image_perm[:5])}")
 
     def get_image_perm(self):
         return torch.randperm(self.dataset.n_images)
