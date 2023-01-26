@@ -223,6 +223,8 @@ class NeuSRenderer:
 
         # Section midpoints
         pts = get_pts(rays_o, rays_d, mid_z_vals)
+        # from models.utils import visualize_rays
+        # visualize_rays(pts[:20].reshape(-1, 3))
 
         dirs = rays_d[:, None, :].expand(pts.shape)
 

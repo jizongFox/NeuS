@@ -5,7 +5,7 @@ import torch
 class Embedder:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        self.create_embedding_fn()
+        self.embed_fns, self.out_dim = self.create_embedding_fn()
 
     def create_embedding_fn(self):
         embed_fns = []
@@ -28,8 +28,7 @@ class Embedder:
                 embed_fns.append(lambda x, p_fn=p_fn, freq=freq: p_fn(x * freq))
                 out_dim += d
 
-        self.embed_fns = embed_fns
-        self.out_dim = out_dim
+        return embed_fns, out_dim
 
     def embed(self, inputs):
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)

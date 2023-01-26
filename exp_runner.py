@@ -3,8 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import typing as t
-from itertools import cycle
+from itertools import chain
 from shutil import copyfile
 
 import cv2 as cv
@@ -13,13 +12,13 @@ import torch
 import torch.nn.functional as F
 import trimesh
 from pyhocon import ConfigFactory
-from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from models.dataset import Dataset
 from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, NeRF
 from models.renderer import NeuSRenderer
+from models.utils import visualize_rays  # noqa
 
 
 class Runner:
@@ -28,9 +27,10 @@ class Runner:
 
         # Configuration
         self.conf_path = conf_path
+
         with open(self.conf_path) as f:
             conf_text = f.read()
-            conf_text = conf_text.replace('CASE_NAME', case)
+        conf_text = conf_text.replace('CASE_NAME', case)
 
         self.conf = ConfigFactory.parse_string(conf_text)
         self.conf['dataset.data_dir'] = self.conf['dataset.data_dir'].replace('CASE_NAME', case)
@@ -62,17 +62,15 @@ class Runner:
         self.writer = None
 
         # Networks
-        params_to_train = []
         self.nerf_outside = NeRF(**self.conf['model.nerf']).to(self.device)
         self.sdf_network = SDFNetwork(**self.conf['model.sdf_network']).to(self.device)
         self.deviation_network = SingleVarianceNetwork(**self.conf['model.variance_network']).to(self.device)
         self.color_network = RenderingNetwork(**self.conf['model.rendering_network']).to(self.device)
-        params_to_train += list(self.nerf_outside.parameters())
-        params_to_train += list(self.sdf_network.parameters())
-        params_to_train += list(self.deviation_network.parameters())
-        params_to_train += list(self.color_network.parameters())
+        model_list = [self.nerf_outside, self.sdf_network, self.deviation_network, self.color_network]
 
-        self.optimizer = torch.optim.Adam(params_to_train, lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(
+            chain(*[x.parameters() for x in model_list]), lr=self.learning_rate
+        )
 
         self.renderer = NeuSRenderer(self.nerf_outside,
                                      self.sdf_network,
@@ -100,30 +98,23 @@ class Runner:
         if self.mode[:5] == 'train':
             self.file_backup()
 
-    def visualize_rays(self, rays: t.Sequence[Tensor] | Tensor) -> None:
-        markers = cycle(['o', '^'])
-        import matplotlib.pyplot as plt
-        if not isinstance(rays, t.Sequence):
-            rays = [rays]
-        rays = [x.clone() for x in rays]
-        rays = [x.cpu().numpy() for x in rays]
-        fig = plt.figure()
-        ax = fig.add_subplot(projection='3d')
-        for r, m in zip(rays, markers):
-            ax.scatter(*r.transpose(-1, -2), marker=m)
-        plt.show()
-
     def train(self):
         self.writer = SummaryWriter(log_dir=os.path.join(self.base_exp_dir, 'logs'))
         self.update_learning_rate()
         res_step = self.end_iter - self.iter_step
         image_perm = self.get_image_perm()
 
+        """
+        cameras_poses = np.concatenate([self.dataset.get_camera_pose(i) for i in range(len(self.dataset))])
+        cameras_poses = torch.from_numpy(cameras_poses).to(self.device)
+        visualize_rays(cameras_poses)
+        """
+
         for _ in tqdm(range(res_step)):
             data = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
 
             rays_o, rays_d, true_rgb, mask = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10]
-            # self.visualize_rays([rays_o, rays_d])
+            # visualize_rays([rays_o, rays_d])
             near, far = self.dataset.near_far_from_sphere(rays_o, rays_d)
 
             background_rgb = None

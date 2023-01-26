@@ -200,3 +200,9 @@ class Dataset:
     def image_at(self, idx, resolution_level):
         img = cv.imread(self.images_lis[idx])
         return (cv.resize(img, (self.W // resolution_level, self.H // resolution_level))).clip(0, 255)
+
+    def get_camera_pose(self, img_id: int):
+        return self.pose_all[img_id, None, :3, 3].detach().cpu().numpy()
+
+    def __len__(self):
+        return self.n_images
