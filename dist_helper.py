@@ -102,3 +102,11 @@ def average_gradients(model: nn.Module):
     for param in model.parameters():
         dist.all_reduce(param.grad.data, op=dist.reduce_op.SUM)
         param.grad.data /= size
+
+
+def broadcast_model_parameters_and_buffers(model: nn.Module):
+    """ Broadcast model parameters and buffers. """
+    for param in model.parameters():
+        dist.broadcast(param.data, 0)
+    for buf in model.buffers():
+        dist.broadcast(buf, 0)
