@@ -15,6 +15,7 @@ from pyhocon import ConfigFactory
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+from dist_helper import init_distributed_mode, DistributedEnv, average_gradients
 from models.dataset import Dataset
 from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, NeRF
 from models.renderer import NeuSRenderer
@@ -66,10 +67,10 @@ class Runner:
         self.sdf_network = SDFNetwork(**self.conf['model.sdf_network']).to(self.device)
         self.deviation_network = SingleVarianceNetwork(**self.conf['model.variance_network']).to(self.device)
         self.color_network = RenderingNetwork(**self.conf['model.rendering_network']).to(self.device)
-        model_list = [self.nerf_outside, self.sdf_network, self.deviation_network, self.color_network]
+        self.__model_list = [self.nerf_outside, self.sdf_network, self.deviation_network, self.color_network]
 
         self.optimizer = torch.optim.Adam(
-            chain(*[x.parameters() for x in model_list]), lr=self.learning_rate
+            chain(*[x.parameters() for x in self.__model_list]), lr=self.learning_rate
         )
 
         self.renderer = NeuSRenderer(self.nerf_outside,
@@ -109,7 +110,6 @@ class Runner:
         cameras_poses = torch.from_numpy(cameras_poses).to(self.device)
         visualize_rays(cameras_poses)
         """
-
         for _ in tqdm(range(res_step)):
             data = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
 
@@ -153,8 +153,11 @@ class Runner:
 
             self.optimizer.zero_grad()
             loss.backward()
-            self.optimizer.step()
+            if DistributedEnv().is_initialized:
+                for model in self.__model_list:
+                    average_gradients(model)
 
+            self.optimizer.step()
             self.iter_step += 1
 
             self.writer.add_scalar('Loss/loss', loss, self.iter_step)
@@ -182,6 +185,7 @@ class Runner:
 
             if self.iter_step % len(image_perm) == 0:
                 image_perm = self.get_image_perm()
+                image_perm = image_perm[::DistributedEnv().world_size]
 
     def get_image_perm(self):
         return torch.randperm(self.dataset.n_images)
@@ -391,12 +395,14 @@ if __name__ == '__main__':
     parser.add_argument('--mode', type=str, default='train')
     parser.add_argument('--mcube_threshold', type=float, default=0.0)
     parser.add_argument('--is_continue', default=False, action="store_true")
-    parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--case', type=str, default='')
 
     args = parser.parse_args()
+    env = DistributedEnv()
+    if env.world_size > 1:
+        init_distributed_mode(env)
+        logging.info("Initialized distributed environment")
 
-    torch.cuda.set_device(args.gpu)
     runner = Runner(args.conf, args.mode, args.case, args.is_continue)
 
     if args.mode == 'train':
