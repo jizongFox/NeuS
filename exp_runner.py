@@ -171,26 +171,28 @@ class Runner:
             self.optimizer.step()
             self.iter_step += 1
 
-            self.writer.add_scalar('Loss/loss', loss, self.iter_step)
-            self.writer.add_scalar('Loss/color_loss', color_fine_loss, self.iter_step)
-            self.writer.add_scalar('Loss/eikonal_loss', eikonal_loss, self.iter_step)
-            self.writer.add_scalar('Statistics/s_val', s_val.mean(), self.iter_step)
-            self.writer.add_scalar('Statistics/cdf', (cdf_fine[:, :1] * mask).sum() / mask_sum, self.iter_step)
-            self.writer.add_scalar('Statistics/weight_max', (weight_max * mask).sum() / mask_sum, self.iter_step)
-            self.writer.add_scalar('Statistics/psnr', psnr, self.iter_step)
+            if env.is_initialized and env.on_master:
+                self.writer.add_scalar('Loss/loss', loss, self.iter_step)
+                self.writer.add_scalar('Loss/color_loss', color_fine_loss, self.iter_step)
+                self.writer.add_scalar('Loss/eikonal_loss', eikonal_loss, self.iter_step)
+                self.writer.add_scalar('Statistics/s_val', s_val.mean(), self.iter_step)
+                self.writer.add_scalar('Statistics/cdf', (cdf_fine[:, :1] * mask).sum() / mask_sum, self.iter_step)
+                self.writer.add_scalar('Statistics/weight_max', (weight_max * mask).sum() / mask_sum, self.iter_step)
+                self.writer.add_scalar('Statistics/psnr', psnr, self.iter_step)
 
-            if self.iter_step % self.report_freq == 0:
-                print(self.base_exp_dir)
-                print('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss, self.optimizer.param_groups[0]['lr']))
+                if self.iter_step % self.report_freq == 0:
+                    print(self.base_exp_dir)
+                    print('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss,
+                                                               self.optimizer.param_groups[0]['lr']))
 
-            if self.iter_step % self.save_freq == 0:
-                self.save_checkpoint()
+                if self.iter_step % self.save_freq == 0:
+                    self.save_checkpoint()
 
-            if self.iter_step % self.val_freq == 0:
-                self.validate_image()
+                if self.iter_step % self.val_freq == 0:
+                    self.validate_image()
 
-            if self.iter_step % self.val_mesh_freq == 0:
-                self.validate_mesh()
+                if self.iter_step % self.val_mesh_freq == 0:
+                    self.validate_mesh()
 
             self.update_learning_rate()
 
