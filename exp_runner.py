@@ -194,6 +194,8 @@ class Runner:
                 if self.iter_step % self.val_mesh_freq == 0:
                     self.validate_mesh()
 
+            env.barrier()
+
             self.update_learning_rate()
 
             if self.iter_step % len(image_perm) == 0:
