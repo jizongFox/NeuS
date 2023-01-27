@@ -100,8 +100,9 @@ def average_gradients(model: nn.Module):
     """ Gradient averaging. """
     size = float(dist.get_world_size())
     for param in model.parameters():
-        dist.all_reduce(param.grad.data, op=dist.reduce_op.SUM)
-        param.grad.data /= size
+        if param.grad is not None:
+            dist.all_reduce(param.grad.data, op=dist.reduce_op.SUM)
+            param.grad.data /= size
 
 
 def broadcast_model_parameters_and_buffers(model: nn.Module):
