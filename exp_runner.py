@@ -15,10 +15,13 @@ from pyhocon import ConfigFactory
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+from dist_helper import init_distributed_mode, DistributedEnv, average_gradients, broadcast_model_parameters_and_buffers
 from models.dataset import Dataset
 from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, NeRF
 from models.renderer import NeuSRenderer
 from models.utils import visualize_rays  # noqa
+
+env = DistributedEnv()
 
 
 class Runner:
@@ -66,10 +69,18 @@ class Runner:
         self.sdf_network = SDFNetwork(**self.conf['model.sdf_network']).to(self.device)
         self.deviation_network = SingleVarianceNetwork(**self.conf['model.variance_network']).to(self.device)
         self.color_network = RenderingNetwork(**self.conf['model.rendering_network']).to(self.device)
-        model_list = [self.nerf_outside, self.sdf_network, self.deviation_network, self.color_network]
+        self.__model_list = [self.nerf_outside, self.sdf_network, self.deviation_network, self.color_network]
+
+        if env.is_initialized:
+            for model in self.__model_list:
+                broadcast_model_parameters_and_buffers(model)
+            logging.debug(
+                f"process {env.local_rank}, "
+                f"model params: {self.nerf_outside.parameters().__next__().max().item()}"
+            )
 
         self.optimizer = torch.optim.Adam(
-            chain(*[x.parameters() for x in model_list]), lr=self.learning_rate
+            chain(*[x.parameters() for x in self.__model_list]), lr=self.learning_rate * env.world_size
         )
 
         self.renderer = NeuSRenderer(self.nerf_outside,
@@ -103,14 +114,14 @@ class Runner:
         self.update_learning_rate()
         res_step = self.end_iter - self.iter_step
         image_perm = self.get_image_perm()
+        logging.debug(f"process: {str(env.local_rank)} {str(image_perm[:5])}")
 
         """
         cameras_poses = np.concatenate([self.dataset.get_camera_pose(i) for i in range(len(self.dataset))])
         cameras_poses = torch.from_numpy(cameras_poses).to(self.device)
         visualize_rays(cameras_poses)
         """
-
-        for _ in tqdm(range(res_step)):
+        for _ in tqdm(range(res_step // env.world_size)):
             data = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
 
             rays_o, rays_d, true_rgb, mask = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10]
@@ -153,30 +164,37 @@ class Runner:
 
             self.optimizer.zero_grad()
             loss.backward()
-            self.optimizer.step()
+            if env.is_initialized:
+                for model in self.__model_list:
+                    average_gradients(model)
 
+            self.optimizer.step()
             self.iter_step += 1
 
-            self.writer.add_scalar('Loss/loss', loss, self.iter_step)
-            self.writer.add_scalar('Loss/color_loss', color_fine_loss, self.iter_step)
-            self.writer.add_scalar('Loss/eikonal_loss', eikonal_loss, self.iter_step)
-            self.writer.add_scalar('Statistics/s_val', s_val.mean(), self.iter_step)
-            self.writer.add_scalar('Statistics/cdf', (cdf_fine[:, :1] * mask).sum() / mask_sum, self.iter_step)
-            self.writer.add_scalar('Statistics/weight_max', (weight_max * mask).sum() / mask_sum, self.iter_step)
-            self.writer.add_scalar('Statistics/psnr', psnr, self.iter_step)
+            if env.is_initialized and env.on_master:
+                self.writer.add_scalar('Loss/loss', loss, self.iter_step)
+                self.writer.add_scalar('Loss/color_loss', color_fine_loss, self.iter_step)
+                self.writer.add_scalar('Loss/eikonal_loss', eikonal_loss, self.iter_step)
+                self.writer.add_scalar('Statistics/s_val', s_val.mean(), self.iter_step)
+                self.writer.add_scalar('Statistics/cdf', (cdf_fine[:, :1] * mask).sum() / mask_sum, self.iter_step)
+                self.writer.add_scalar('Statistics/weight_max', (weight_max * mask).sum() / mask_sum, self.iter_step)
+                self.writer.add_scalar('Statistics/psnr', psnr, self.iter_step)
 
-            if self.iter_step % self.report_freq == 0:
-                print(self.base_exp_dir)
-                print('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss, self.optimizer.param_groups[0]['lr']))
+                if self.iter_step % self.report_freq == 0:
+                    print(self.base_exp_dir)
+                    print('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss,
+                                                               self.optimizer.param_groups[0]['lr']))
 
-            if self.iter_step % self.save_freq == 0:
-                self.save_checkpoint()
+                if self.iter_step % self.save_freq == 0:
+                    self.save_checkpoint()
 
-            if self.iter_step % self.val_freq == 0:
-                self.validate_image()
+                if self.iter_step % self.val_freq == 0:
+                    self.validate_image()
 
-            if self.iter_step % self.val_mesh_freq == 0:
-                self.validate_mesh()
+                if self.iter_step % self.val_mesh_freq == 0:
+                    self.validate_mesh()
+
+            env.barrier()
 
             self.update_learning_rate()
 
@@ -391,12 +409,13 @@ if __name__ == '__main__':
     parser.add_argument('--mode', type=str, default='train')
     parser.add_argument('--mcube_threshold', type=float, default=0.0)
     parser.add_argument('--is_continue', default=False, action="store_true")
-    parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--case', type=str, default='')
 
     args = parser.parse_args()
+    if env.world_size > 1:
+        init_distributed_mode(env)
+        logging.info("Initialized distributed environment")
 
-    torch.cuda.set_device(args.gpu)
     runner = Runner(args.conf, args.mode, args.case, args.is_continue)
 
     if args.mode == 'train':

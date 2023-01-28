@@ -105,8 +105,7 @@ class NeuSRenderer:
         mid_z_vals = z_vals + dists * 0.5
 
         # Section midpoints
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * mid_z_vals[..., :, None]  # batch_size, n_samples, 3
-
+        pts = get_pts(rays_o, rays_d, mid_z_vals)
         dis_to_center = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=True).clip(1.0, 1e10)
         pts = torch.cat([pts / dis_to_center, 1.0 / dis_to_center], dim=-1)  # batch_size, n_samples, 4
 
@@ -374,6 +373,7 @@ class NeuSRenderer:
             'inside_sphere': ret_fine['inside_sphere']
         }
 
+    @torch.no_grad()
     def resampling(self, rays_d, rays_o, z_vals, up_sample_steps: int, n_importance: int):
         batch_size = rays_d.shape[0]
         pts = get_pts(rays_o, rays_d, z_vals)
