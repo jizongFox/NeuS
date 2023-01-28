@@ -25,18 +25,27 @@ class LearnableDeformableField(Module):
         self.w = w
         self.deformable_matrix = torch.zeros(self.h, self.w, 2, dtype=torch.float32)
         self.deformable_matrix = torch.nn.Parameter(self.deformable_matrix, requires_grad=True)
+        self._previous_indices = None
 
     def forward(self, h_coordinates, *, pixels_y: Tensor, pixels_x: Tensor):
         assert h_coordinates.dim() in {2, 3}, h_coordinates.shape
         if h_coordinates.dim() == 2:
             h_coordinates[:, :2] += self.deformable_matrix[(pixels_y.long(), pixels_x.long())]
+            self._previous_indices = (pixels_y.long(), pixels_x.long())
         else:
             cur_shape = h_coordinates.shape[:2]
             resized_matrix = \
                 F.interpolate(self.deformable_matrix.swapaxes(-1, 0)[None, :], size=cur_shape, mode='bilinear')[0]
             resized_matrix = resized_matrix.transpose(0, -1).transpose(0, 1)
             h_coordinates[:, :, :2] += resized_matrix
+            self._previous_indices = None
         return h_coordinates
+
+    def weight_decay(self, weight: float):
+        if self._previous_indices:
+            elements = self.deformable_matrix[self._previous_indices].ravel()
+            return torch.pow(elements, 2).mean() * weight
+        return torch.tensor(0.0)
 
 
 # This function is borrowed from IDR: https://github.com/lioryariv/idr

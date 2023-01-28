@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import typing as t
+
 import mcubes
 import numpy as np
 import torch
@@ -6,7 +10,12 @@ from torch import Tensor
 
 
 @torch.no_grad()
-def extract_fields(bound_min, bound_max, resolution, query_func):
+def extract_fields(
+        bound_min: t.Tuple[float, float, float],
+        bound_max: t.Tuple[float, float, float],
+        resolution: int,
+        query_func: t.Callable[[Tensor], Tensor]
+):
     N = 64
     X = torch.linspace(bound_min[0], bound_max[0], resolution).split(N)
     Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(N)

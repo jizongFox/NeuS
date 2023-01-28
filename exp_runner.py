@@ -49,7 +49,8 @@ class Runner:
         self.deformable_field = None
         if self.use_deformable_field:
             self.deformable_field = LearnableDeformableField(h=self.dataset.H, w=self.dataset.W)
-            logging.info("Deformable Field created.")
+            self.deformable_weight_decay: float = self.conf["dataset"].get_float('weight_decay', default=1e-3)
+            logging.info(f"Deformable Field created with weight decay={self.deformable_weight_decay:.3e}.")
 
         self.dataset._deform_field = self.deformable_field
 
@@ -178,6 +179,9 @@ class Runner:
             loss = color_fine_loss + \
                    eikonal_loss * self.igr_weight + \
                    mask_loss * self.mask_weight
+
+            if self.use_deformable_field:
+                loss += self.deformable_field.weight_decay(weight=self.deformable_weight_decay)
 
             self.optimizer.zero_grad()
             loss.backward()
