@@ -187,8 +187,8 @@ class Runner:
 
                 if self.iter_step % self.report_freq == 0:
                     logging.info(self.base_exp_dir)
-                    logging.info('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss,
-                                                                      self.optimizer.param_groups[0]['lr']))
+                    logging.info('iter:{:8>d} loss = {:.3e} lr={:.3e}'.format(self.iter_step, loss,
+                                                                              self.optimizer.param_groups[0]['lr']))
 
                 if self.iter_step % self.save_freq == 0:
                     self.save_checkpoint()
@@ -404,9 +404,9 @@ class Runner:
 
 
 if __name__ == '__main__':
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
-    FORMAT = "[%(filename)s:%(lineno)s - %(funcName)s() ] %(message)s"
+    FORMAT = "[%(filename)5s:%(lineno)3s - %(funcName)s() ] %(message)s"
     logging.basicConfig(level=logging.DEBUG, format=FORMAT)
 
     parser = argparse.ArgumentParser()
