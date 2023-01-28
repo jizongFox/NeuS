@@ -14,12 +14,13 @@ import trimesh
 from pyhocon import ConfigFactory
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 
 from dist_helper import init_distributed_mode, DistributedEnv, average_gradients, broadcast_model_parameters_and_buffers
-from models.dataset import Dataset
+from models.dataset import Dataset, LearnableDeformableField
 from models.fields import RenderingNetwork, SDFNetwork, SingleVarianceNetwork, NeRF
 from models.renderer import NeuSRenderer
-from models.utils import visualize_rays  # noqa
+from models.utils import visualize_rays, nostdout  # noqa
 
 env = DistributedEnv()
 
@@ -38,8 +39,20 @@ class Runner:
         self.conf = ConfigFactory.parse_string(conf_text)
         self.conf['dataset.data_dir'] = self.conf['dataset.data_dir'].replace('CASE_NAME', case)
         self.base_exp_dir = self.conf['general.base_exp_dir']
+        if args.comment:
+            self.base_exp_dir = self.base_exp_dir.replace(case, case + "-" + args.comment)
         os.makedirs(self.base_exp_dir, exist_ok=True)
+
         self.dataset = Dataset(self.conf['dataset'])
+        self.use_deformable_field = self.conf["dataset"].get_bool('use_deformable_field', default=False)
+
+        self.deformable_field = None
+        if self.use_deformable_field:
+            self.deformable_field = LearnableDeformableField(h=self.dataset.H, w=self.dataset.W)
+            logging.info("Deformable Field created.")
+
+        self.dataset._deform_field = self.deformable_field
+
         self.iter_step = 0
 
         # Training parameters
@@ -69,7 +82,10 @@ class Runner:
         self.sdf_network = SDFNetwork(**self.conf['model.sdf_network']).to(self.device)
         self.deviation_network = SingleVarianceNetwork(**self.conf['model.variance_network']).to(self.device)
         self.color_network = RenderingNetwork(**self.conf['model.rendering_network']).to(self.device)
+
         self.__model_list = [self.nerf_outside, self.sdf_network, self.deviation_network, self.color_network]
+        if self.use_deformable_field:
+            self.__model_list.append(self.deformable_field)
 
         if env.is_initialized:
             for model in self.__model_list:
@@ -110,18 +126,19 @@ class Runner:
             self.file_backup()
 
     def train(self):
-        self.writer = SummaryWriter(log_dir=os.path.join(self.base_exp_dir, 'logs'))
+        if env.on_master:
+            self.writer = SummaryWriter(log_dir=os.path.join(self.base_exp_dir, 'logs'))
+
         self.update_learning_rate()
         res_step = self.end_iter - self.iter_step
         image_perm = self.get_image_perm()
-        logging.debug(f"process: {str(env.local_rank)} {str(image_perm[:5])}")
 
         """
         cameras_poses = np.concatenate([self.dataset.get_camera_pose(i) for i in range(len(self.dataset))])
         cameras_poses = torch.from_numpy(cameras_poses).to(self.device)
         visualize_rays(cameras_poses)
         """
-        for _ in tqdm(range(res_step // env.world_size)):
+        for _ in tqdm(range(res_step // env.world_size), disable=not env.on_master, dynamic_ncols=True):
             data = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
 
             rays_o, rays_d, true_rgb, mask = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10]
@@ -171,7 +188,7 @@ class Runner:
             self.optimizer.step()
             self.iter_step += 1
 
-            if env.is_initialized and env.on_master:
+            if env.on_master:
                 self.writer.add_scalar('Loss/loss', loss, self.iter_step)
                 self.writer.add_scalar('Loss/color_loss', color_fine_loss, self.iter_step)
                 self.writer.add_scalar('Loss/eikonal_loss', eikonal_loss, self.iter_step)
@@ -181,9 +198,9 @@ class Runner:
                 self.writer.add_scalar('Statistics/psnr', psnr, self.iter_step)
 
                 if self.iter_step % self.report_freq == 0:
-                    print(self.base_exp_dir)
-                    print('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss,
-                                                               self.optimizer.param_groups[0]['lr']))
+                    logging.info(self.base_exp_dir)
+                    logging.info('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss,
+                                                                      self.optimizer.param_groups[0]['lr']))
 
                 if self.iter_step % self.save_freq == 0:
                     self.save_checkpoint()
@@ -243,6 +260,8 @@ class Runner:
         self.color_network.load_state_dict(checkpoint['color_network_fine'])
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.iter_step = checkpoint['iter_step']
+        if self.use_deformable_field:
+            self.deformable_field.load_state_dict(checkpoint['deformable_field'])
 
         logging.info('End')
 
@@ -255,6 +274,10 @@ class Runner:
             'optimizer': self.optimizer.state_dict(),
             'iter_step': self.iter_step,
         }
+        if self.use_deformable_field:
+            checkpoint.update({
+                "deformable_field": self.deformable_field.state_dict()
+            })
 
         os.makedirs(os.path.join(self.base_exp_dir, 'checkpoints'), exist_ok=True)
         torch.save(checkpoint,
@@ -264,7 +287,7 @@ class Runner:
         if idx < 0:
             idx = np.random.randint(self.dataset.n_images)
 
-        print('Validate: iter: {}, camera: {}'.format(self.iter_step, idx))
+        logging.info('Validate: iter: {}, camera: {}'.format(self.iter_step, idx))
 
         if resolution_level < 0:
             resolution_level = self.validate_resolution_level
@@ -401,7 +424,7 @@ class Runner:
 if __name__ == '__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-    FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
+    FORMAT = "[%(filename)s:%(lineno)s - %(funcName)s() ] %(message)s"
     logging.basicConfig(level=logging.DEBUG, format=FORMAT)
 
     parser = argparse.ArgumentParser()
@@ -410,6 +433,7 @@ if __name__ == '__main__':
     parser.add_argument('--mcube_threshold', type=float, default=0.0)
     parser.add_argument('--is_continue', default=False, action="store_true")
     parser.add_argument('--case', type=str, default='')
+    parser.add_argument('--comment', type=str, default='')
 
     args = parser.parse_args()
     if env.world_size > 1:
@@ -419,11 +443,11 @@ if __name__ == '__main__':
     runner = Runner(args.conf, args.mode, args.case, args.is_continue)
 
     if args.mode == 'train':
-        runner.train()
+        with logging_redirect_tqdm():
+            runner.train()
     elif args.mode == 'validate_mesh':
         runner.validate_mesh(world_space=True, resolution=512, threshold=args.mcube_threshold)
     elif args.mode.startswith('interpolate'):  # Interpolate views given two image indices
         _, img_idx_0, img_idx_1 = args.mode.split('_')
-        img_idx_0 = int(img_idx_0)
-        img_idx_1 = int(img_idx_1)
+        img_idx_0, img_idx_1 = int(img_idx_0), int(img_idx_1)
         runner.interpolate_view(img_idx_0, img_idx_1)

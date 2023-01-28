@@ -7,7 +7,27 @@ import numpy as np
 import torch
 from scipy.spatial.transform import Rotation as Rot
 from scipy.spatial.transform import Slerp
+from torch import Tensor
+from torch.nn import Module
 from tqdm import tqdm
+
+from dist_helper import DistributedEnv
+
+env = DistributedEnv()
+
+
+class LearnableDeformableField(Module):
+
+    def __init__(self, *, h, w) -> None:
+        super().__init__()
+        self.h = h
+        self.w = w
+        self.deformable_matrix = torch.zeros(self.h, self.w, 2, dtype=torch.float32)
+        self.deformable_matrix = torch.nn.Parameter(self.deformable_matrix, requires_grad=True)
+
+    def forward(self, h_coordinates, *, pixels_y: Tensor, pixels_x: Tensor):
+        h_coordinates[:, :2] += self.deformable_matrix[(pixels_y, pixels_x)]
+        return h_coordinates
 
 
 # This function is borrowed from IDR: https://github.com/lioryariv/idr
@@ -49,7 +69,7 @@ def load_K_Rt_from_P(filename, P=None):
 
 
 class Dataset:
-    def __init__(self, conf):
+    def __init__(self, conf, deform_field: LearnableDeformableField = None):
         super(Dataset, self).__init__()
         logging.info('Load data: Begin')
         self.device = torch.device('cuda')
@@ -68,13 +88,16 @@ class Dataset:
         self.n_images = len(self.images_lis)
         h, w, c = cv.imread(self.images_lis[0]).shape
         self.images_np = np.zeros((self.n_images, h, w, c))
-        for i, im_name in enumerate(tqdm(self.images_lis, desc="loading rgb images", leave=False)):
+        for i, im_name in enumerate(
+                tqdm(self.images_lis, desc="loading rgb images", leave=False, dynamic_ncols=True,
+                     disable=not env.on_master)):
             self.images_np[i] = cv.imread(im_name) / 256.0
 
         self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.png')))
 
         self.masks_np = np.zeros((self.n_images, h, w, c))
-        for i, im_name in enumerate(tqdm(self.masks_lis, desc="loading mask images", leave=False)):
+        for i, im_name in enumerate(tqdm(self.masks_lis, desc="loading mask images", leave=False, dynamic_ncols=True,
+                                         disable=not env.on_master)):
             self.masks_np[i] = cv.imread(im_name) / 256.0
 
         # world_mat is a projection matrix from world to image
@@ -114,17 +137,25 @@ class Dataset:
         self.object_bbox_min = object_bbox_min[:3, 0]
         self.object_bbox_max = object_bbox_max[:3, 0]
 
+        self._deform_field = deform_field
         logging.info('Load data: End')
+
+    def _gen_regular_grid(self, resolution_level: int = 1):
+        l: int = resolution_level
+        tx = torch.linspace(0, self.W - 1, self.W // l)
+        ty = torch.linspace(0, self.H - 1, self.H // l)
+        pixels_x, pixels_y = torch.meshgrid(tx, ty)
+        return pixels_x, pixels_y
 
     def gen_rays_at(self, img_idx: int, resolution_level: int = 1):
         """
         Generate rays at world space from one camera.
         """
-        l: int = resolution_level
-        tx = torch.linspace(0, self.W - 1, self.W // l)
-        ty = torch.linspace(0, self.H - 1, self.H // l)
-        pixels_x, pixels_y = torch.meshgrid(tx, ty)
+        pixels_x, pixels_y = self._gen_regular_grid(resolution_level=resolution_level)
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1)  # W, H, 3
+        if self._deform_field is not None:
+            p = self._deform_field(p, pixels_y=pixels_y, pixels_x=pixels_x)
+
         p = torch.matmul(self.intrinsics_all_inv[img_idx, None, None, :3, :3], p[:, :, :, None]).squeeze()  # W, H, 3
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)  # W, H, 3
         rays_v = torch.matmul(self.pose_all[img_idx, None, None, :3, :3], rays_v[:, :, :, None]).squeeze()  # W, H, 3
@@ -141,6 +172,9 @@ class Dataset:
         mask = self.masks[img_idx].to(self.device)[(pixels_y, pixels_x)]  # batch_size, 3
         # pixel coordinates
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1).float()  # batch_size, 3
+        if self._deform_field is not None:
+            p = self._deform_field(p, pixels_y=pixels_y, pixels_x=pixels_x)
+
         # x = K@Pos@X
         # K^-1 x = Pos X
         # Pos^-1 K^-1 x = X
@@ -162,11 +196,12 @@ class Dataset:
         """
         Interpolate pose between two cameras.
         """
-        l = resolution_level
-        tx = torch.linspace(0, self.W - 1, self.W // l)
-        ty = torch.linspace(0, self.H - 1, self.H // l)
-        pixels_x, pixels_y = torch.meshgrid(tx, ty)
+        pixels_x, pixels_y = self._gen_regular_grid(resolution_level=resolution_level)
+
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1)  # W, H, 3
+        if self._deform_field is not None:
+            p = self._deform_field(p, pixels_y=pixels_y, pixels_x=pixels_x)
+
         p = torch.matmul(self.intrinsics_all_inv[0, None, None, :3, :3], p[:, :, :, None]).squeeze()  # W, H, 3
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)  # W, H, 3
         trans = self.pose_all[idx_0, :3, 3] * (1.0 - ratio) + self.pose_all[idx_1, :3, 3] * ratio
