@@ -89,6 +89,7 @@ class DistributedEnv(metaclass=_Singleton):
 
 
 def init_distributed_mode(distributed_env: DistributedEnv, init_method: str = None):
+    os.environ["OMP_NUM_THREADS"] = "1"
     torch.cuda.set_device(distributed_env.local_rank)
     dist.init_process_group(backend="nccl", init_method=init_method,
                             world_size=distributed_env.world_size, rank=distributed_env.rank)
