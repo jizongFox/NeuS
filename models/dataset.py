@@ -9,6 +9,7 @@ from scipy.spatial.transform import Rotation as Rot
 from scipy.spatial.transform import Slerp
 from torch import Tensor
 from torch.nn import Module
+from torch.nn import functional as F
 from tqdm import tqdm
 
 from dist_helper import DistributedEnv
@@ -26,7 +27,15 @@ class LearnableDeformableField(Module):
         self.deformable_matrix = torch.nn.Parameter(self.deformable_matrix, requires_grad=True)
 
     def forward(self, h_coordinates, *, pixels_y: Tensor, pixels_x: Tensor):
-        h_coordinates[:, :2] += self.deformable_matrix[(pixels_y, pixels_x)]
+        assert h_coordinates.dim() in {2, 3}, h_coordinates.shape
+        if h_coordinates.dim() == 2:
+            h_coordinates[:, :2] += self.deformable_matrix[(pixels_y.long(), pixels_x.long())]
+        else:
+            cur_shape = h_coordinates.shape[:2]
+            resized_matrix = \
+                F.interpolate(self.deformable_matrix.swapaxes(-1, 0)[None, :], size=cur_shape, mode='bilinear')[0]
+            resized_matrix = resized_matrix.transpose(0, -1).transpose(0, 1)
+            h_coordinates[:, :, :2] += resized_matrix
         return h_coordinates
 
 

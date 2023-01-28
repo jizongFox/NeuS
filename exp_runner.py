@@ -199,8 +199,8 @@ class Runner:
 
                 if self.iter_step % self.report_freq == 0:
                     logging.info(self.base_exp_dir)
-                    logging.info('iter:{:8>d} loss = {:.3e} lr={:.3e}'.format(self.iter_step, loss,
-                                                                              self.optimizer.param_groups[0]['lr']))
+                    logging.info('iter:{:8>d} loss={:.3e} lr={:.3e} psnr={:.3e} '.format(
+                        self.iter_step, loss, self.optimizer.param_groups[0]['lr'], psnr))
 
                 if self.iter_step % self.save_freq == 0:
                     self.save_checkpoint()
