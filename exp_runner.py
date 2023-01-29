@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import typing as t
 from itertools import chain
 from shutil import copyfile
 
@@ -69,6 +70,7 @@ class Runner:
         self.use_white_bkgd = self.conf.get_bool('train.use_white_bkgd')
         self.warm_up_end = self.conf.get_float('train.warm_up_end', default=0.0)
         self.anneal_end = self.conf.get_float('train.anneal_end', default=0.0)
+        self.criterion_names: t.List[str] = self.conf.get_list('train.loss_name', default=["l1"])
 
         # Weights
         self.igr_weight = self.conf.get_float('train.igr_weight')
@@ -170,7 +172,12 @@ class Runner:
 
             # Loss
             color_error = (color_fine - true_rgb) * mask
-            color_fine_loss = F.l1_loss(color_error, torch.zeros_like(color_error), reduction='sum') / mask_sum
+            color_fine_loss = torch.tensor(0.0)
+            if "mse" in self.criterion_names:
+                color_fine_loss += F.mse_loss(color_error, torch.zeros_like(color_error), reduction='sum') / mask_sum
+            if "l1" in self.criterion_names:
+                color_fine_loss = F.l1_loss(color_error, torch.zeros_like(color_error), reduction='sum') / mask_sum
+
             psnr = 20.0 * torch.log10(1.0 / (((color_fine - true_rgb) ** 2 * mask).sum() / (mask_sum * 3.0)).sqrt())
 
             eikonal_loss = gradient_error
