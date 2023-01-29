@@ -139,7 +139,8 @@ class Runner:
         cameras_poses = torch.from_numpy(cameras_poses).to(self.device)
         visualize_rays(cameras_poses)
         """
-        for _ in tqdm(range(res_step // env.world_size), disable=not env.on_master, dynamic_ncols=True):
+        pbar = tqdm(range(res_step // env.world_size), disable=not env.on_master, dynamic_ncols=True)
+        for _ in pbar:
             data = self.dataset.gen_random_rays_at(image_perm[self.iter_step % len(image_perm)], self.batch_size)
 
             rays_o, rays_d, true_rgb, mask = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10]
@@ -221,6 +222,7 @@ class Runner:
 
             if self.iter_step % len(image_perm) == 0:
                 image_perm = self.get_image_perm()
+        pbar.close()
 
     def get_image_perm(self):
         return torch.randperm(self.dataset.n_images)
@@ -403,7 +405,6 @@ class Runner:
         images = []
         n_frames = 60
         for i in range(n_frames):
-            print(i)
             images.append(self.render_novel_image(img_idx_0,
                                                   img_idx_1,
                                                   np.sin(((i / n_frames) - 0.5) * np.pi) * 0.5 + 0.5,

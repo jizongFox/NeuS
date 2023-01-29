@@ -106,17 +106,18 @@ class Dataset:
         self.n_images = len(self.images_lis)
         h, w, c = cv.imread(self.images_lis[0]).shape
         self.images_np = np.zeros((self.n_images, h, w, c))
-        for i, im_name in enumerate(
-                tqdm(self.images_lis, desc="loading rgb images", leave=False, dynamic_ncols=True,
-                     disable=not env.on_master)):
-            self.images_np[i] = cv.imread(im_name) / 256.0
+        with tqdm(self.images_lis, desc="loading rgb images", leave=False, dynamic_ncols=True,
+                  disable=not env.on_master) as pbar:
+            for i, im_name in enumerate(pbar):
+                self.images_np[i] = cv.imread(im_name) / 256.0
 
         self.masks_lis = sorted(glob(os.path.join(self.data_dir, 'mask/*.png')))
 
         self.masks_np = np.zeros((self.n_images, h, w, c))
-        for i, im_name in enumerate(tqdm(self.masks_lis, desc="loading mask images", leave=False, dynamic_ncols=True,
-                                         disable=not env.on_master)):
-            self.masks_np[i] = cv.imread(im_name) / 256.0
+        with tqdm(self.masks_lis, desc="loading mask images", leave=False, dynamic_ncols=True,
+                  disable=not env.on_master) as pbar:
+            for i, im_name in enumerate(pbar):
+                self.masks_np[i] = cv.imread(im_name) / 256.0
 
         # world_mat is a projection matrix from world to image
         self.world_mats_np = [camera_dict['world_mat_%d' % idx].astype(np.float32) for idx in range(self.n_images)]
