@@ -28,7 +28,7 @@ def run_colmap(basedir, match_type):
         '--database_path', os.path.join(basedir, 'database.db'),
         '--image_path', os.path.join(basedir, 'images'),
         '--ImageReader.single_camera', '1',
-        # '--SiftExtraction.use_gpu', '0',
+        '--SiftExtraction.use_gpu', '1',
     ]
     feat_output = (subprocess.check_output(feature_extractor_args, universal_newlines=True))
     logfile.write(feat_output)
@@ -48,8 +48,8 @@ def run_colmap(basedir, match_type):
         os.makedirs(p)
 
     # mapper_args = [
-    #     'colmap', 'mapper', 
-    #         '--database_path', os.path.join(basedir, 'database.db'), 
+    #     'colmap', 'mapper',
+    #         '--database_path', os.path.join(basedir, 'database.db'),
     #         '--image_path', os.path.join(basedir, 'images'),
     #         '--output_path', os.path.join(basedir, 'sparse'),
     #         '--Mapper.num_threads', '16',
@@ -68,7 +68,17 @@ def run_colmap(basedir, match_type):
 
     map_output = (subprocess.check_output(mapper_args, universal_newlines=True))
     logfile.write(map_output)
-    logfile.close()
     print('Sparse map created')
+
+    alignment_args = [
+        "colmap", "model_orientation_aligner",
+        "--image_path", f"{basedir}/images",
+        "--input_path", f"{basedir}/sparse/0/",
+        "--output_path", f"{basedir}/sparse/0/",
+    ]
+    align_output = (subprocess.check_output(alignment_args, universal_newlines=True))
+    logfile.write(align_output)
+    logfile.close()
+    print('Align map created')
 
     print('Finished running COLMAP, see {} for logs'.format(logfile_name))

@@ -82,7 +82,7 @@ def load_K_Rt_from_P(filename, P=None):
     pose = np.eye(4, dtype=np.float32)
     pose[:3, :3] = R.transpose()  # The transpose of a rotation matrix is its inverse.
     pose[:3, 3] = (t[:3] / t[3])[:, 0]
-
+    # https://github.com/sxyu/pixel-nerf/issues/10
     return intrinsics, pose
 
 
