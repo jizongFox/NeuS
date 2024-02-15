@@ -1,12 +1,96 @@
 from __future__ import annotations
 
 import typing as t
+from dataclasses import dataclass
 
 import mcubes
 import numpy as np
 import torch
 import torch.nn.functional as F
+from jaxtyping import Float
 from torch import Tensor
+
+
+@dataclass
+class Gaussians:
+    """Stores Gaussians
+
+    Args:
+        mean: Mean of multivariate Gaussian
+        cov: Covariance of multivariate Gaussian.
+    """
+
+    mean: Float[Tensor, "*batch dim"]
+    cov: Float[Tensor, "*batch dim dim"]
+
+
+def compute_3d_gaussian(
+        directions: Float[Tensor, "*batch 3"],
+        means: Float[Tensor, "*batch 3"],
+        dir_variance: Float[Tensor, "*batch 1"],
+        radius_variance: Float[Tensor, "*batch 1"],
+) -> Gaussians:
+    """Compute gaussian along ray.
+
+    Args:
+        directions: Axis of Gaussian.
+        means: Mean of Gaussian.
+        dir_variance: Variance along direction axis.
+        radius_variance: Variance tangent to direction axis.
+
+    Returns:
+        Gaussians: Oriented 3D gaussian.
+    """
+
+    dir_outer_product = directions[..., :, None] * directions[..., None, :]
+    eye = torch.eye(directions.shape[-1], device=directions.device)
+    dir_mag_sq = torch.clamp(torch.sum(directions ** 2, dim=-1, keepdim=True), min=1e-10)
+    null_outer_product = eye - directions[..., :, None] * (directions / dir_mag_sq)[..., None, :]
+    dir_cov_diag = dir_variance[..., None] * dir_outer_product[..., :, :]
+    radius_cov_diag = radius_variance[..., None] * null_outer_product[..., :, :]
+    cov = dir_cov_diag + radius_cov_diag
+    return Gaussians(mean=means, cov=cov)
+
+
+def conical_frustum_to_gaussian(
+        origins: Float[Tensor, "*batch 3"],
+        directions: Float[Tensor, "*batch 3"],
+        starts: Float[Tensor, "*batch 1"],
+        ends: Float[Tensor, "*batch 1"],
+        radius: Float[Tensor, "*batch 1"],
+) -> Gaussians:
+    """Approximates conical frustums with a Gaussian distributions.
+
+    Uses stable parameterization described in mip-NeRF publication.
+
+    Args:
+        origins: Origins of cones.
+        directions: Direction (axis) of frustums.
+        starts: Start of conical frustums.
+        ends: End of conical frustums.
+        radius: Radii of cone a distance of 1 from the origin.
+
+    Returns:
+        Gaussians: Approximation of conical frustums
+    """
+    mu = (starts + ends) / 2.0
+    hw = (ends - starts) / 2.0
+    means = origins + directions * (mu + (2.0 * mu * hw ** 2.0) / (3.0 * mu ** 2.0 + hw ** 2.0))
+    dir_variance = (hw ** 2) / 3 - (4 / 15) * ((hw ** 4 * (12 * mu ** 2 - hw ** 2)) / (3 * mu ** 2 + hw ** 2) ** 2)
+    radius_variance = radius ** 2 * ((mu ** 2) / 4 + (5 / 12) * hw ** 2 - 4 / 15 * (hw ** 4) / (3 * mu ** 2 + hw ** 2))
+    return compute_3d_gaussian(directions, means, dir_variance, radius_variance)
+
+
+def get_gaussian_blob(origins, directions, starts, ends, pixel_area) -> Gaussians:
+    """Calculates guassian approximation of conical frustum.
+
+    Returns:
+        Conical frustums approximated by gaussian distribution.
+    """
+    # Cone radius is set such that the square pixel_area matches the cone area.
+    cone_radius = torch.sqrt(pixel_area) / 1.7724538509055159  # r = sqrt(pixel_area / pi)
+    return conical_frustum_to_gaussian(origins=origins, directions=directions, starts=starts,
+                                       ends=ends, radius=cone_radius, )
 
 
 @torch.no_grad()
@@ -233,13 +317,23 @@ class NeuSRenderer:
         pts = get_pts(rays_o, rays_d, mid_z_vals)
         # from models.utils import visualize_rays
         # visualize_rays(pts[:20].reshape(-1, 3))
+        # here is the code to integrate the gaussian blob
+        #
+        wide_shape = pts.shape
 
         dirs = rays_d[:, None, :].expand(pts.shape)
 
         pts = pts.reshape(-1, 3)
         dirs = dirs.reshape(-1, 3)
 
-        sdf_nn_output = sdf_network(pts)
+        gaussian_blob = get_gaussian_blob(origins=rays_o[:, None, :].expand(wide_shape),
+                                          directions=rays_d[:, None, :].expand(wide_shape), starts=z_vals.unsqueeze(-1),
+                                          ends=torch.cat([z_vals[..., 1:],
+                                                          torch.Tensor([sample_dist]).expand(dists[..., :1].shape)],
+                                                         -1).unsqueeze(-1),
+                                          pixel_area=torch.ones(tuple([*wide_shape[:-1], 1])))
+
+        sdf_nn_output = sdf_network(pts, cov=gaussian_blob.cov.reshape(-1, 3, 3))
         sdf = sdf_nn_output[:, :1]
         feature_vector = sdf_nn_output[:, 1:]
 

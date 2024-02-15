@@ -70,10 +70,13 @@ class SDFNetwork(nn.Module):
 
         self.activation = nn.Softplus(beta=100)
 
-    def forward(self, inputs):
+    def forward(self, inputs, cov=None):
         inputs = inputs * self.scale
+        # cov = torch.randn(inputs.shape[0], inputs.shape[1], inputs.shape[1])
+        # cov = torch.bmm(cov, cov.transpose(1, 2))
+        # cov = None
         if self.embed_fn_fine is not None:
-            inputs = self.embed_fn_fine(inputs)
+            inputs = self.embed_fn_fine(inputs, cov=cov)
 
         x = inputs
         for l in range(0, self.num_layers - 1):
